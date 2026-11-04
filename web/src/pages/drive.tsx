@@ -11,7 +11,9 @@ import {
   List,
   MoreVertical,
   Pencil,
+  RefreshCw,
   Share2,
+  SlidersHorizontal,
   Star,
   Trash2,
   Undo2,
@@ -84,6 +86,14 @@ export function DrivePage({
   const [renameValue, setRenameValue] = useState('')
   const [moving, setMoving] = useState<FileItem[] | null>(null)
   const [busy, setBusy] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [filters, setFilters] = useState<{ kind: string; accountId: string; size: string; date: string }>({
+    kind: '',
+    accountId: '',
+    size: '',
+    date: '',
+  })
   const [offset, setOffset] = useState(0)
   const lastClicked = useRef<number | null>(null)
 
@@ -99,7 +109,7 @@ export function DrivePage({
   useEffect(() => {
     setOffset(0)
     setSelected(new Set())
-  }, [view, folderId, debounced, sort, dir])
+  }, [view, folderId, debounced, sort, dir, filters])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -112,6 +122,18 @@ export function DrivePage({
     })
     if (folderId) params.set('folderId', folderId)
     if (debounced.trim()) params.set('q', debounced.trim())
+    if (filters.kind) params.set('kind', filters.kind)
+    if (filters.accountId) params.set('accountId', filters.accountId)
+    if (filters.size === 'small') params.set('maxSize', String(1024 * 1024))
+    if (filters.size === 'medium') {
+      params.set('minSize', String(1024 * 1024))
+      params.set('maxSize', String(100 * 1024 * 1024))
+    }
+    if (filters.size === 'large') params.set('minSize', String(100 * 1024 * 1024))
+    if (filters.date) {
+      const days = filters.date === 'week' ? 7 : filters.date === 'month' ? 30 : 365
+      params.set('after', String(Date.now() - days * 24 * 60 * 60 * 1000))
+    }
 
     try {
       const result = await api.get<FilesResponse>(`/api/files?${params.toString()}`)
@@ -122,7 +144,7 @@ export function DrivePage({
     } finally {
       setLoading(false)
     }
-  }, [view, folderId, debounced, sort, dir, offset])
+  }, [view, folderId, debounced, sort, dir, offset, filters])
 
   useEffect(() => {
     void load()
@@ -304,6 +326,39 @@ export function DrivePage({
     </button>
   )
 
+  /**
+   * Pull changes made directly inside Google Drive. Google is the source of
+   * truth, so this is a reconcile, not a re-upload: nothing is downloaded.
+   */
+  const syncDrive = async () => {
+    setSyncing(true)
+    try {
+      const summary = await api.post<{ added: number; updated: number; removed: number; errors: { message: string }[] }>(
+        '/api/files/sync',
+      )
+      const changes = summary.added + summary.updated + summary.removed
+      toast({
+        title: changes ? 'Drive synced' : 'Already in sync',
+        description: changes
+          ? `${summary.added} new · ${summary.updated} updated · ${summary.removed} removed in Drive`
+          : 'No changes found inside your Drive folder.',
+        tone: changes ? 'success' : 'info',
+      })
+      if (summary.errors.length) {
+        toast({ title: 'Some accounts could not be synced', description: summary.errors[0].message, tone: 'error' })
+      }
+      await load()
+      emit('refresh')
+    } catch (err) {
+      toast({ title: 'Sync failed', description: (err as Error).message, tone: 'error' })
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  const hasGoogle = (stats?.accounts ?? []).some((account) => account.provider === 'google')
+  const activeFilters = Object.values(filters).filter(Boolean).length
+
   const emptyState = useMemo(() => {
     // No storage yet is a different kind of empty: nothing can be uploaded
     // until an account is connected, so say exactly that.
@@ -330,8 +385,14 @@ export function DrivePage({
         />
       )
     }
-    if (debounced) {
-      return <EmptyState icon={<List size={20} />} title="No matches" description={`Nothing here matches “${debounced}”.`} />
+    if (debounced || activeFilters > 0) {
+      return (
+        <EmptyState
+          icon={<List size={20} />}
+          title="No matches"
+          description={debounced ? `Nothing here matches “${debounced}”.` : 'No files match these filters.'}
+        />
+      )
     }
     if (view === 'starred') {
       return <EmptyState icon={<Star size={20} />} title="No starred files" description="Star files you want to find again quickly." />
@@ -353,7 +414,7 @@ export function DrivePage({
         }
       />
     )
-  }, [view, debounced, onUploadClick, onNewFolder, stats?.accounts.length])
+  }, [view, debounced, onUploadClick, onNewFolder, stats?.accounts.length, activeFilters])
 
   return (
     <div className="mx-auto w-full max-w-[1400px] px-4 pb-24 pt-5 sm:px-6">
@@ -386,6 +447,114 @@ export function DrivePage({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {hasGoogle && (
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() => void syncDrive()}
+              disabled={syncing}
+              title="Import changes made inside Google Drive"
+            >
+              <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
+              {syncing ? 'Syncing' : 'Sync Drive'}
+            </button>
+          )}
+          <div className="relative">
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() => setFiltersOpen((open) => !open)}
+              aria-expanded={filtersOpen}
+              title="Filter by type, account, size or date"
+            >
+              <SlidersHorizontal size={14} />
+              Filters
+              {activeFilters > 0 && (
+                <span className="ml-0.5 rounded-full bg-[var(--accent)] px-1.5 text-[10px] font-semibold text-white">
+                  {activeFilters}
+                </span>
+              )}
+            </button>
+
+            {filtersOpen && (
+              <div className="absolute right-0 z-40 mt-1.5 w-64 rounded-xl border border-line bg-elevated p-3 shadow-panel">
+                <div className="space-y-2.5">
+                  <label className="block">
+                    <span className="label">Type</span>
+                    <select
+                      className="input"
+                      value={filters.kind}
+                      onChange={(event) => setFilters({ ...filters, kind: event.target.value })}
+                    >
+                      <option value="">Any type</option>
+                      <option value="image">Images</option>
+                      <option value="video">Video</option>
+                      <option value="audio">Audio</option>
+                      <option value="pdf">PDF</option>
+                      <option value="archive">Archives</option>
+                    </select>
+                  </label>
+
+                  {(stats?.accounts.length ?? 0) > 1 && (
+                    <label className="block">
+                      <span className="label">Account</span>
+                      <select
+                        className="input"
+                        value={filters.accountId}
+                        onChange={(event) => setFilters({ ...filters, accountId: event.target.value })}
+                      >
+                        <option value="">Any account</option>
+                        {(stats?.accounts ?? []).map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+
+                  <label className="block">
+                    <span className="label">Size</span>
+                    <select
+                      className="input"
+                      value={filters.size}
+                      onChange={(event) => setFilters({ ...filters, size: event.target.value })}
+                    >
+                      <option value="">Any size</option>
+                      <option value="small">Under 1 MB</option>
+                      <option value="medium">1 – 100 MB</option>
+                      <option value="large">Over 100 MB</option>
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="label">Modified</span>
+                    <select
+                      className="input"
+                      value={filters.date}
+                      onChange={(event) => setFilters({ ...filters, date: event.target.value })}
+                    >
+                      <option value="">Any time</option>
+                      <option value="week">Last 7 days</option>
+                      <option value="month">Last 30 days</option>
+                      <option value="year">Last year</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div className="mt-3 flex justify-between">
+                  <button
+                    className="text-[12px] text-dim hover:text-body"
+                    onClick={() => setFilters({ kind: '', accountId: '', size: '', date: '' })}
+                  >
+                    Clear
+                  </button>
+                  <button className="btn btn-primary btn-sm" onClick={() => setFiltersOpen(false)}>
+                    Done
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="flex items-center gap-1 rounded-lg border border-line bg-panel p-0.5">
             <button
               onClick={() => setLayout('list')}

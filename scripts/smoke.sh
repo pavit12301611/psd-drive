@@ -3,11 +3,19 @@
 #
 #   bash scripts/smoke.sh [base-url]
 #
-# Creates a throwaway user, connects a local-disk account, then exercises the
+# Creates a throwaway user, gives it a storage account, then exercises the
 # production path end to end: streamed upload, byte-exact download, HTTP Range,
-# full-text search, public sharing and API-key uploads.
+# full-text search, filters, public sharing, API-key uploads and Drive sync.
 #
 # Needs only bash and curl — no jq, no node.
+#
+#   bash scripts/smoke.sh
+#   bash scripts/smoke.sh http://localhost:3000
+#   SMOKE_EMAIL=you@example.com SMOKE_PASSWORD=... bash scripts/smoke.sh
+#
+# On a real install (no local disk, no Google account yet) pass SMOKE_EMAIL and
+# SMOKE_PASSWORD for an account that already has storage connected, or start the
+# server with ENABLE_LOCAL_DISK=true to test without credentials.
 set -euo pipefail
 
 BASE="${1:-http://localhost:3000}"
@@ -28,25 +36,44 @@ curl -fsS "$BASE/healthz" | grep -q '"ok":true' && pass "health check" || fail "
 # 2 — public instance facts (what the login screen uses)
 INSTANCE=$(curl -fsS "$BASE/api/auth/instance")
 DEMO_MODE=$(printf '%s' "$INSTANCE" | grep -o '"demoMode":[a-z]*' | cut -d: -f2)
-[ -n "$DEMO_MODE" ] && pass "instance endpoint answers (demo mode: $DEMO_MODE)" || fail "instance endpoint"
+LOCAL_DISK=$(printf '%s' "$INSTANCE" | grep -o '"localDiskEnabled":[a-z]*' | cut -d: -f2)
+[ -n "$DEMO_MODE" ] && pass "instance endpoint answers (demo: $DEMO_MODE, local disk: $LOCAL_DISK)" || fail "instance endpoint"
 
-# 3 — create a throwaway account
-EMAIL="smoke-$(date +%s)-$RANDOM@example.test"
-REGISTER=$(curl -sS -c "$JAR" -X POST "$BASE/api/auth/register" \
-  -H 'content-type: application/json' \
-  -d "{\"name\":\"Smoke Test\",\"email\":\"$EMAIL\",\"password\":\"smoke-test-password\"}" || true)
-TOKEN=$(printf '%s' "$REGISTER" | val accessToken)
-if [ -z "$TOKEN" ]; then
-  echo "  could not register ($REGISTER)"
-  echo "  registration may be closed on this instance — set ALLOW_SIGNUP=true or sign in manually."
-  exit 1
+# 3 — sign in, or create a throwaway account
+if [ -n "${SMOKE_EMAIL:-}" ]; then
+  EMAIL="$SMOKE_EMAIL"
+  SESSION=$(curl -sS -c "$JAR" -X POST "$BASE/api/auth/login" \
+    -H 'content-type: application/json' \
+    -d "{\"email\":\"$SMOKE_EMAIL\",\"password\":\"${SMOKE_PASSWORD:-}\"}" || true)
+  TOKEN=$(printf '%s' "$SESSION" | val accessToken)
+  [ -n "$TOKEN" ] && pass "signed in as $EMAIL" || { echo "  sign-in failed: $SESSION"; exit 1; }
+else
+  EMAIL="smoke-$(date +%s)-$RANDOM@example.test"
+  REGISTER=$(curl -sS -c "$JAR" -X POST "$BASE/api/auth/register" \
+    -H 'content-type: application/json' \
+    -d "{\"name\":\"Smoke Test\",\"email\":\"$EMAIL\",\"password\":\"smoke-test-password\"}" || true)
+  TOKEN=$(printf '%s' "$REGISTER" | val accessToken)
+  if [ -z "$TOKEN" ]; then
+    echo "  could not register ($REGISTER)"
+    echo "  registration may be closed on this instance — set ALLOW_SIGNUP=true or pass SMOKE_EMAIL/SMOKE_PASSWORD."
+    exit 1
+  fi
+  pass "account created ($EMAIL)"
 fi
-pass "account created ($EMAIL)"
 
-# 4 — connect a storage account (local disk: no credentials needed)
-ADDED=$(curl -fsS -X POST "$BASE/api/accounts/local" -H "authorization: Bearer $TOKEN" \
-  -H 'content-type: application/json' -d '{"label":"Smoke disk","quotaGb":1}')
-[ -n "$(printf '%s' "$ADDED" | val id)" ] && pass "storage account connected" || fail "connect account"
+# 4 — make sure there is somewhere to upload
+CONNECTED=$(curl -fsS "$BASE/api/accounts" -H "authorization: Bearer $TOKEN" | num accountCount)
+if [ "${CONNECTED:-0}" -eq 0 ]; then
+  if [ "$LOCAL_DISK" = "true" ]; then
+    ADDED=$(curl -fsS -X POST "$BASE/api/accounts/local" -H "authorization: Bearer $TOKEN" \
+      -H 'content-type: application/json' -d '{"label":"Smoke disk","quotaGb":1}')
+    [ -n "$(printf '%s' "$ADDED" | val id)" ] && pass "storage account connected (local disk)" || fail "connect account"
+  else
+    echo "  no storage account on this instance and local disk is disabled."
+    echo "  connect Google Drive/S3 in the UI, or pass SMOKE_EMAIL/SMOKE_PASSWORD for an account that has one."
+    exit 1
+  fi
+fi
 
 STATS=$(curl -fsS "$BASE/api/stats" -H "authorization: Bearer $TOKEN")
 ACCOUNTS=$(printf '%s' "$STATS" | num accountCount)
@@ -71,6 +98,10 @@ curl -fsS -b "$JAR" -H 'Range: bytes=0-4' "$BASE/api/files/content/$FILE_ID" -o 
 # 8 — instant search
 curl -fsS "$BASE/api/files?q=hello" -H "authorization: Bearer $TOKEN" | grep -q 'hello.txt' \
   && pass "full-text search finds the file" || fail "search"
+
+# 8b — size filter narrows the list
+SMALL=$(curl -fsS "$BASE/api/files?maxSize=4" -H "authorization: Bearer $TOKEN" | num total)
+[ "${SMALL:-1}" = "0" ] && pass "size filter excludes larger files" || fail "size filter"
 
 # 9 — public share link, no session at all
 SHARE=$(curl -fsS -X POST "$BASE/api/shares" -H "authorization: Bearer $TOKEN" \

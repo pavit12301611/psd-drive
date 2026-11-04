@@ -257,6 +257,13 @@ export async function loginDemo(): Promise<SessionResponse> {
   return data as SessionResponse
 }
 
+/** Google sign-in: the URL to hand the browser to. */
+export async function googleSignInUrl(next = '/drive'): Promise<string> {
+  const res = await fetch(`/api/oauth/google/login/url?next=${encodeURIComponent(next)}`, { credentials: 'include' })
+  const data = (await parse(res)) as { url: string }
+  return data.url
+}
+
 export async function logout(): Promise<void> {
   accessToken = null
   await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {})

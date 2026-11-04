@@ -64,6 +64,11 @@ type FileQuery = {
   q?: string
   kind?: string
   accountId?: string
+  /** Size and date filters, mirroring the reference app's search bar. */
+  minSize?: number
+  maxSize?: number
+  after?: number
+  before?: number
   starred?: boolean
   view?: 'all' | 'recent' | 'starred' | 'trash' | 'shared'
   sort?: 'name' | 'size' | 'updated' | 'kind'
@@ -112,6 +117,23 @@ export function queryFiles(params: FileQuery): { files: PublicFile[]; total: num
     args.push(params.accountId)
   } else if (view === 'shared') {
     where.push('exists (select 1 from shares s where s.file_id = f.id and s.enabled = 1)')
+  }
+
+  if (Number.isFinite(params.minSize)) {
+    where.push('f.size_bytes >= ?')
+    args.push(Number(params.minSize))
+  }
+  if (Number.isFinite(params.maxSize)) {
+    where.push('f.size_bytes <= ?')
+    args.push(Number(params.maxSize))
+  }
+  if (Number.isFinite(params.after)) {
+    where.push('f.updated_at >= ?')
+    args.push(Number(params.after))
+  }
+  if (Number.isFinite(params.before)) {
+    where.push('f.updated_at <= ?')
+    args.push(Number(params.before))
   }
 
   if (params.kind && KINDS_BY_FILTER[params.kind]) {

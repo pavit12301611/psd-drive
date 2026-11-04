@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { all, get, run } from '../db/index.ts'
 import { encrypt, newId } from '../lib/crypto.ts'
+import { config } from '../config.ts'
 import { badRequest, notFound } from '../lib/errors.ts'
 import { signRequest } from '../lib/sigv4.ts'
 import { requireUser } from '../middleware/auth.ts'
@@ -118,6 +119,11 @@ accountsRouter.post('/s3', async (c) => {
 
 accountsRouter.post('/local', async (c) => {
   const user = c.get('user')
+  if (!config.localDisk) {
+    throw badRequest(
+      'Local disk storage is disabled on this instance. Connect Google Drive or an S3 bucket — that is where your files belong.',
+    )
+  }
   const body = localSchema.parse(await c.req.json())
 
   const id = newId()

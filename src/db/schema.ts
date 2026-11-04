@@ -164,6 +164,15 @@ const migrations: { version: number; sql: string }[] = [
     END;
   `,
   },
+  {
+    // "Continue with Google": a user can be identified by their Google subject
+    // instead of (or as well as) a password.
+    version: 2,
+    sql: /* sql */ `
+    ALTER TABLE users ADD COLUMN google_id TEXT;
+    CREATE UNIQUE INDEX idx_users_google ON users(google_id) WHERE google_id IS NOT NULL;
+  `,
+  },
 ]
 
 export function migrate(): void {

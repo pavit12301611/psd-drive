@@ -34,6 +34,14 @@ export type DownloadResult = {
   etag?: string
 }
 
+export type RemoteObject = {
+  id: string
+  name: string
+  mimeType: string
+  size: number
+  updatedAt: number
+}
+
 export interface StorageProvider {
   readonly type: string
   upload(input: UploadInput): Promise<StoredObject>
@@ -43,4 +51,12 @@ export interface StorageProvider {
   quota(): Promise<Quota>
   /** Human label for the settings screen, e.g. the bucket name. */
   describe(): string
+  /**
+   * Optional: enumerate what actually sits in the provider right now.
+   *
+   * Only Google Drive implements it today. It is what makes "Sync Drive" work:
+   * files uploaded straight into the PSDrive folder from the Drive web UI show
+   * up in the app, and files deleted over there disappear from it.
+   */
+  list?(): Promise<RemoteObject[]>
 }

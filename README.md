@@ -2,9 +2,10 @@
 
 **One drive for every cloud.**
 
-PSDrive pools multiple Google Drive accounts (plus any S3-compatible bucket and local disk) into a single,
-fast, self-hosted file manager. Uploads are routed automatically to whichever account still has room, and
-every byte is streamed straight through the server — never buffered, never written to temp disk.
+PSDrive pools multiple Google Drive accounts (plus any S3-compatible bucket) into a single, fast,
+self-hosted file manager. Uploads are routed automatically to whichever account still has room, and every
+byte is streamed straight through the server — **never buffered, never written to the server's disk**. The
+server keeps metadata and encrypted credentials; your files live in your own Drive.
 
 Rebuilt from scratch as a faster, smaller take on [9drive](https://github.com/zenhosta/9drive).
 
@@ -16,8 +17,7 @@ Rebuilt from scratch as a faster, smaller take on [9drive](https://github.com/ze
         ├──────────────┤         │     │    PSDrive    │      one storage pool
         │  R2 bucket   │ ∞       │     │  (one process)│      one set of share links
         ├──────────────┤         │     └───────────────┘
-        │  local disk  │ 2 TB    ┘
-        └──────────────┘
+        │  you@3       │ 15 GB   ┘
 ```
 
 ---
@@ -60,16 +60,21 @@ The architecture that produces those numbers:
 ## Features
 
 **Storage**
-- Google Drive, S3-compatible buckets (AWS, R2, MinIO, Wasabi, B2, Spaces) and local disk in one pool.
-- Combined quota meter with per-account breakdown.
+- Google Drive and S3-compatible buckets (AWS, R2, MinIO, Wasabi, B2, Spaces) in one pool.
+- Combined quota meter with per-account breakdown, read from Google's real `storageQuota`.
 - Upload routing: *most free space*, *round-robin*, or *priority order* — with a hard guarantee that a file only
   goes to an account that can hold the whole thing (and a clean `507` when nothing can).
 - Google uploads land in a `PSDrive` folder inside that account's Drive.
+- **Sync Drive**: pull the `PSDrive` folder back into the app after you add, rename or delete files from
+  drive.google.com. Metadata only — nothing is re-downloaded or re-uploaded.
+- **Nothing is stored on the server.** No blob directory, no temp files; the data directory holds a SQLite
+  database and an encryption key. Local-disk storage exists only as an opt-in (`ENABLE_LOCAL_DISK=true`).
 
 **Files**
 - Nested folders with colours and icons, list and grid views, drag-and-drop uploads.
 - Streaming uploads with a progress tray: live speed, ETA, cancel/retry, three concurrent transfers.
-- Instant search powered by SQLite FTS5 (index-maintained by triggers).
+- Instant search powered by SQLite FTS5 (index-maintained by triggers), plus filters for type, account,
+  size and modified date.
 - Sort by name/size/modified, cursor-free pagination, multi-select with shift-click, right-click menus.
 - Preview images, video, audio, PDF and text inline with keyboard navigation.
 - Rename, move, star, trash, restore, purge, empty trash.
@@ -82,10 +87,39 @@ The architecture that produces those numbers:
 - `POST /api/v1/files?name=...` streaming upload, list, download and delete endpoints.
 - Copy-paste cURL snippets generated from your own instance URL.
 
+**Accounts**
+- Email + password, or **Continue with Google** — which signs you in and connects that Drive in one step.
+- Google OAuth credentials can be pasted in the setup wizard or Settings; no `.env` required.
+
 **Operations**
 - Single container, single data directory, `GET /healthz`.
 - AES-256-GCM encryption for provider credentials and OAuth tokens.
 - Graceful shutdown, structured logs, per-request IDs, rate limiting on auth and public endpoints.
+
+## Compared with 9Drive
+
+PSDrive is a reimplementation of [9Drive](https://github.com/zenhosta/9drive) that keeps its feature set and
+drops its operational weight. Where this version is deliberately different, it says so.
+
+|  | 9Drive | PSDrive |
+|---|---|---|
+| Stack | Express 5, Prisma, MySQL, React | Hono, `node:sqlite`, React — 3 runtime dependencies |
+| Deploy | 2 containers + a database | one Node process, one data directory |
+| Storage backends | Google Drive, S3 | Google Drive, S3 |
+| Upload routing | most-available / round-robin / priority | same, plus a `507` before any bytes move |
+| Sync Drive | ✅ manual button | ✅ `POST /api/files/sync`, metadata only |
+| Search | text + type/account/size/date | FTS5 + type/account/size/date |
+| Folders, previews, trash | ✅ | ✅ |
+| Public links | viewer + embed | viewer page that can be embedded; everything else refuses framing |
+| Invites (viewer/editor) | ✅ | ❌ roadmap — public links and scoped API keys instead |
+| Sign-in | email/password + reCAPTCHA + Google | email/password + **Continue with Google** |
+| Upload API | multipart `/api/v1/uploads` | streaming `/api/v1/files` (cURL-friendly) |
+| Batch ZIP download | ✅ | ❌ roadmap |
+| Resumable uploads | ✅ chunked endpoints | single streamed request (Google's own session underneath) |
+| Backup / one-click update | in-app (PM2) | copy `DATA_DIR`; no in-app updater |
+| Bytes on server disk | none | none |
+
+The rows marked ❌ are real differences, listed so nobody finds out the hard way.
 
 ## Quick start
 
@@ -204,6 +238,7 @@ All configuration is environment based and fully optional. See [`.env.example`](
 | `APP_SECRET` | auto-generated | AES key; stored in `DATA_DIR/secret.key` if unset |
 | `DEMO_MODE` | `false` | Seed a sample workspace (demo@psdrive.local / demo1234) |
 | `ALLOW_SIGNUP` | `true` | Let people other than the first owner create an account |
+| `ENABLE_LOCAL_DISK` | `false` | Allow a "local disk" storage account (demo mode forces it on) |
 | `GOOGLE_APP_FOLDER` | `PSDrive` | Folder created inside each Drive for uploads |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
 | `MAX_UPLOAD_BYTES` | 8 GiB | Per-file upload limit |
@@ -286,7 +321,7 @@ More detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## Development
 
 ```bash
-npm test          # 48 tests: SigV4 vectors, crypto, ranges, PDF, S3 + Google providers, full-stack API
+npm test          # 52 tests: SigV4 vectors, crypto, ranges, PDF, S3 + Google providers, full-stack API
 npm run bench     # the benchmark table above
 npm run typecheck # strict TypeScript over server + web
 ```
@@ -304,6 +339,8 @@ the account to *reconnect*. Only credentials differ between that run and product
 
 ## Security notes
 
+- **No file bytes touch the server's disk.** Uploads stream request → provider; downloads stream provider → client.
+  Only the SQLite index and the encryption key live in `DATA_DIR` (asserted by a test).
 - Provider credentials and OAuth tokens are encrypted at rest with AES-256-GCM.
 - Passwords use scrypt (N=16384) with per-user salts; API keys and refresh tokens are stored as SHA-256 hashes.
 - Refresh tokens rotate on every use, live in an http-only cookie scoped to `/api/auth`, and are revocable.

@@ -58,6 +58,9 @@ before(async () => {
       PORT: String(PORT),
       DATA_DIR: dataDir,
       DEMO_MODE: 'false',
+      // This suite exercises the storage-independent parts of the API, so it
+      // turns the local backend on; production defaults it off.
+      ENABLE_LOCAL_DISK: 'true',
       LOG_LEVEL: 'error',
       APP_SECRET: 'test-secret-that-is-long-enough-for-aes-256!!',
     },
@@ -175,6 +178,23 @@ test('full-text search finds uploaded files', async () => {
 
   const miss = await json(await fetch(`${BASE}/api/files?q=nothingmatchesthis`, { headers: auth() }))
   assert.equal(miss.total, 0)
+})
+
+test('filters narrow by size, type, account and date', async () => {
+  const small = await json(await fetch(`${BASE}/api/files?maxSize=${1024 * 1024}`, { headers: auth() }))
+  assert.equal(small.total, 0, 'the only file is 2 MB')
+
+  const large = await json(await fetch(`${BASE}/api/files?minSize=${1024 * 1024}`, { headers: auth() }))
+  assert.ok(large.total >= 1)
+  assert.ok(large.files.every((file: { sizeBytes: number }) => file.sizeBytes >= 1024 * 1024))
+
+  const byType = await json(await fetch(`${BASE}/api/files?kind=image`, { headers: auth() }))
+  assert.equal(byType.total, 0)
+
+  const future = await json(
+    await fetch(`${BASE}/api/files?after=${Date.now() + 86_400_000}`, { headers: auth() }),
+  )
+  assert.equal(future.total, 0, 'nothing was modified tomorrow')
 })
 
 test('public share links work without a session', async () => {

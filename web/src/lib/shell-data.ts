@@ -10,6 +10,7 @@ export type Stats = {
   activity: ActivityItem[]
   googleConfigured: boolean
   demoMode: boolean
+  localDiskEnabled: boolean
   maxUploadBytes: number
 }
 

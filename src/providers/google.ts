@@ -1,6 +1,6 @@
 import { config } from '../config.ts'
 import { HttpError, badGateway } from '../lib/errors.ts'
-import type { ByteRange, DownloadResult, Quota, StorageProvider, StoredObject, UploadInput } from './types.ts'
+import type { ByteRange, DownloadResult, Quota, RemoteObject, StorageProvider, StoredObject, UploadInput } from './types.ts'
 
 /**
  * Google Drive provider — the real one.
@@ -297,6 +297,58 @@ export class GoogleProvider implements StorageProvider {
       }),
     )
     if (!res.ok) throw await googleFailure(res, 'rename')
+  }
+
+  /**
+   * Everything inside the PSDrive folder, page by page.
+   *
+   * Google caps a page at 1000 entries, so a real library needs the loop; the
+   * `fields` list is trimmed to what the index actually stores.
+   */
+  async list(): Promise<RemoteObject[]> {
+    const folderId = await this.#deps.getAppFolderId()
+    const out: RemoteObject[] = []
+    let pageToken: string | undefined
+
+    do {
+      const params = new URLSearchParams({
+        q: `'${folderId.replace(/'/g, "\\'")}' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'`,
+        fields: 'nextPageToken, files(id,name,mimeType,size,modifiedTime)',
+        pageSize: '1000',
+        spaces: 'drive',
+        supportsAllDrives: 'true',
+        includeItemsFromAllDrives: 'true',
+        orderBy: 'modifiedTime desc',
+      })
+      if (pageToken) params.set('pageToken', pageToken)
+
+      const res = await this.#authed((token) =>
+        fetch(`${DRIVE()}/files?${params.toString()}`, { headers: { authorization: `Bearer ${token}` } }),
+      )
+      if (!res.ok) {
+        const error = await googleFailure(res, 'listing')
+        if (error.code === 'GOOGLE_REAUTH') this.#deps.report?.({ kind: 'reauth', message: error.message })
+        throw error
+      }
+
+      const page = (await res.json()) as {
+        files?: { id: string; name: string; mimeType: string; size?: string; modifiedTime?: string }[]
+        nextPageToken?: string
+      }
+
+      for (const file of page.files ?? []) {
+        out.push({
+          id: file.id,
+          name: file.name,
+          mimeType: file.mimeType,
+          size: file.size ? Number(file.size) : 0,
+          updatedAt: file.modifiedTime ? Date.parse(file.modifiedTime) || Date.now() : Date.now(),
+        })
+      }
+      pageToken = page.nextPageToken
+    } while (pageToken)
+
+    return out
   }
 
   async quota(): Promise<Quota> {

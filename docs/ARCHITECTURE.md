@@ -104,6 +104,8 @@ Free space comes from two places:
   for a **signed, short-lived `state`** (900 s) containing the user id *and the redirect URI derived from the live
   request*. That makes the flow work on localhost, a custom domain or behind a proxy without editing `APP_URL`,
   and it makes token exchange use the exact same `redirect_uri` as the authorize request.
+- Two flows share one callback: `mode: 'connect'` adds a Drive to the signed-in user, `mode: 'login'` finds or
+  creates the user from their Google identity, opens a session and connects that Drive in the same trip.
 - Access tokens are cached **in memory** and refreshed by a **single-flight promise map**: ten parallel uploads to
   one account produce exactly one `POST /token`.
 - Refresh tokens are encrypted at rest and reused on re-consent (Google only issues one on the first approval).
@@ -119,6 +121,22 @@ Free space comes from two places:
 - `invalid_grant` on refresh is terminal: the account is set to `reauth_required`, `available_bytes` drops to `0`
   (which removes it from routing) and the UI offers a **Reconnect** button. `storageQuotaExceeded` on upload does
   the same with status `full`.
+
+## 5b. The index is a cache; Google is the source of truth
+
+`POST /api/files/sync` reconciles one `files.list` page-set per connected Drive against the local index:
+
+- present in Drive, absent here → inserted (`added`)
+- renamed/resized there → row refreshed (`updated`)
+- gone from Drive, still `active` here → moved to the recycle bin (`removed`), never left as a dead row
+
+Only metadata crosses the wire (`fields=id,name,mimeType,size,modifiedTime`), so syncing 10,000 files costs
+kilobytes. The listing is paged at Google's 1000-entry cap and goes through the same 401 → refresh → retry
+helper as everything else.
+
+Why a cache at all: filtering, full-text search, folder trees and pagination in SQLite answer in ~0.05 ms,
+where an equivalent Drive query is a network round trip. Uploads write the index row immediately, so the
+common path never waits on a re-list.
 
 ## 6. Authentication model
 
@@ -159,7 +177,8 @@ behaviour without exposing FTS5 syntax. If a query yields no usable tokens it fa
 | Situation | What happens |
 |---|---|
 | Provider rejects an upload | Partial object removed, no metadata row written, clear `502` with the provider message |
-| Client disconnects mid-upload | Request signal aborts the pipeline, temp file cleaned up, logged at debug |
+| Client disconnects mid-upload | Request signal aborts the pipeline, provider session abandoned, logged at debug |
+| Sync fails for one account | That account is reported in `errors[]`; the other accounts still sync |
 | Google token expired | Refreshed once, transparently, then the request proceeds |
 | Google token refresh fails (`invalid_grant`) | Account → `reauth_required`, removed from rotation, **Reconnect** offered |
 | Google Drive API not enabled | `400 DRIVE_API_DISABLED` with the exact Console steps, at connect time |

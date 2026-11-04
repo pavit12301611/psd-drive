@@ -7,6 +7,7 @@ import { requireUser } from '../middleware/auth.ts'
 import { logActivity } from '../services/activity.ts'
 import { buildProvider } from '../services/accounts.ts'
 import { folderPath, getFileWithAccount, getFileRow, listFolders, queryFiles } from '../services/files.ts'
+import { syncDrive } from '../services/sync.ts'
 import { getAccount } from '../services/accounts.ts'
 
 export const filesRouter = new Hono()
@@ -74,6 +75,16 @@ async function streamFile(c: Context, mode: 'inline' | 'attachment') {
 
 /* -------------------------------- routes -------------------------------- */
 
+/**
+ * Sync Drive: pull changes made inside Google Drive into this index.
+ * Metadata only — no file bytes move.
+ */
+filesRouter.post('/sync', async (c) => {
+  const user = c.get('user')
+  const summary = await syncDrive(user.id)
+  return c.json(summary)
+})
+
 filesRouter.get('/content/:id', (c) => streamFile(c, 'inline'))
 filesRouter.get('/download/:id', (c) => streamFile(c, 'attachment'))
 
@@ -90,6 +101,10 @@ filesRouter.get('/', (c) => {
     q,
     kind: c.req.query('kind') || undefined,
     accountId: c.req.query('accountId') || undefined,
+    minSize: c.req.query('minSize') ? Number(c.req.query('minSize')) : undefined,
+    maxSize: c.req.query('maxSize') ? Number(c.req.query('maxSize')) : undefined,
+    after: c.req.query('after') ? Number(c.req.query('after')) : undefined,
+    before: c.req.query('before') ? Number(c.req.query('before')) : undefined,
     sort: (c.req.query('sort') as 'name' | 'size' | 'updated' | 'kind') || undefined,
     dir: (c.req.query('dir') as 'asc' | 'desc') || undefined,
     limit: Number(c.req.query('limit') ?? 60),

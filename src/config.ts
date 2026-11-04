@@ -26,6 +26,8 @@ function int(value: string | undefined, fallback: number): number {
 const dataDir = path.resolve(root, process.env.DATA_DIR || './data')
 mkdirSync(dataDir, { recursive: true })
 
+const demoMode = bool(process.env.DEMO_MODE, false)
+
 /** Persisted at-rest key for provider credentials. Never leaves the server. */
 function loadSecret(): Buffer {
   const explicit = process.env.APP_SECRET
@@ -50,7 +52,13 @@ export const config = {
   webDist: path.join(root, 'dist'),
   // Demo mode is strictly opt-in. A fresh install starts empty and asks for a
   // real owner account and a real storage connection.
-  demoMode: bool(process.env.DEMO_MODE, false),
+  demoMode,
+  /**
+   * Local disk storage. OFF by default: PSDrive is a gateway, and file bytes
+   * must live in the storage you connect, not on the server. The demo
+   * workspace needs it, so demo mode turns it on.
+   */
+  localDisk: bool(process.env.ENABLE_LOCAL_DISK, demoMode),
   /**
    * Open registration. Once the first (owner) account exists you can close it
    * and invite additional people from the app instead.
@@ -77,6 +85,7 @@ export const config = {
   logLevel: (process.env.LOG_LEVEL || 'info') as 'debug' | 'info' | 'warn' | 'error',
 } as const
 
-mkdirSync(config.blobDir, { recursive: true })
+// The blob directory is created lazily by the local provider (if it is enabled
+// at all) — a cloud-only install never writes a single file byte to disk.
 
 export type Config = typeof config

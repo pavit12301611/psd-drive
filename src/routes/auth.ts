@@ -1,29 +1,18 @@
-import { Hono, type Context } from 'hono'
-import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
+import { Hono } from 'hono'
+import { deleteCookie, getCookie } from 'hono/cookie'
 import { z } from 'zod'
 import { config } from '../config.ts'
 import { get, run } from '../db/index.ts'
 import { hashPassword, newId, randomToken, sha256, verifyPassword } from '../lib/crypto.ts'
 import { HttpError, conflict, unauthorized } from '../lib/errors.ts'
-import { signAccessToken } from '../lib/jwt.ts'
 import { rateLimit } from '../lib/ratelimit.ts'
 import { logActivity } from '../services/activity.ts'
-import { loadUser, requireUser, type AuthUser } from '../middleware/auth.ts'
+import { loadUser, requireUser } from '../middleware/auth.ts'
+import { ACCESS_COOKIE, REFRESH_COOKIE, issueSession, publicUser } from '../services/session.ts'
 import { ensureDemoUser } from '../services/demo.ts'
 import { googleOAuth } from '../services/settings.ts'
 
 export const authRouter = new Hono()
-
-const REFRESH_COOKIE = 'psd_rt'
-/**
- * The access token is *also* mirrored into an http-only cookie.
- *
- * <img>, <video>, <iframe> and plain download links cannot send an
- * Authorization header, so media and downloads authenticate with this cookie.
- * `requireUser` only accepts it for safe methods (GET/HEAD), so a cross-site
- * form or fetch can never use it to change anything.
- */
-const ACCESS_COOKIE = 'psd_at'
 
 const credentialsSchema = z.object({
   email: z.string().trim().toLowerCase().email('Enter a valid email address.'),
@@ -33,49 +22,6 @@ const credentialsSchema = z.object({
 const registerSchema = credentialsSchema.extend({
   name: z.string().trim().min(1, 'Tell us your name.').max(80),
 })
-
-function isSecure(c: Context): boolean {
-  return config.appUrl.startsWith('https://') || c.req.header('x-forwarded-proto') === 'https'
-}
-
-function issueSession(c: Context, user: { id: string; email: string; name: string }) {
-  const refreshToken = randomToken(32)
-  const expiresAt = Date.now() + config.refreshTokenTtl * 1000
-
-  run(
-    'insert into sessions (id, user_id, token_hash, user_agent, ip, expires_at, created_at) values (?, ?, ?, ?, ?, ?, ?)',
-    newId(),
-    user.id,
-    sha256(refreshToken),
-    c.req.header('user-agent')?.slice(0, 200) ?? null,
-    c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
-    expiresAt,
-    Date.now(),
-  )
-
-  setCookie(c, REFRESH_COOKIE, refreshToken, {
-    httpOnly: true,
-    sameSite: 'Lax',
-    secure: isSecure(c),
-    path: '/api/auth',
-    maxAge: config.refreshTokenTtl,
-  })
-
-  const accessToken = signAccessToken(user)
-  setCookie(c, ACCESS_COOKIE, accessToken, {
-    httpOnly: true,
-    sameSite: 'Lax',
-    secure: isSecure(c),
-    path: '/',
-    maxAge: config.accessTokenTtl,
-  })
-
-  return {
-    accessToken,
-    expiresIn: config.accessTokenTtl,
-    user: { id: user.id, email: user.email, name: user.name },
-  }
-}
 
 /**
  * Public instance facts the login and setup screens need *before* there is a
@@ -89,6 +35,7 @@ authRouter.get('/instance', (c) => {
     users,
     signupOpen: users === 0 || config.allowSignup,
     demoMode: config.demoMode,
+    localDiskEnabled: config.localDisk,
     google: {
       configured: Boolean(oauth),
       redirectUri: oauth?.redirectUri ?? `${config.appUrl}/api/oauth/google/callback`,
@@ -98,10 +45,6 @@ authRouter.get('/instance', (c) => {
     version: '2.0.0',
   })
 })
-
-function publicUser(user: AuthUser) {
-  return { id: user.id, name: user.name, email: user.email, avatarUrl: user.avatarUrl, role: user.role }
-}
 
 authRouter.post('/register', async (c) => {
   const body = registerSchema.parse(await c.req.json())
@@ -172,8 +115,7 @@ authRouter.post('/refresh', async (c) => {
   if (!user) throw unauthorized('This account is no longer active.')
 
   // Rotate: the old refresh token is burned on every use.
-  run('update sessions set revoked_at = ? where id = ?', Date.now(), session.id)
-  const next = issueSession(c, user)
+  const next = issueSession(c, user, { rotateFrom: token })
   return c.json({ ...next, user: publicUser(user) })
 })
 

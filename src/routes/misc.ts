@@ -48,6 +48,7 @@ statsRouter.get('/', (c) => {
     activity: listActivity(user.id, 8),
     googleConfigured: Boolean(googleOAuth()),
     demoMode: config.demoMode,
+    localDiskEnabled: config.localDisk,
     maxUploadBytes: config.maxUploadBytes,
   })
 })
@@ -92,6 +93,7 @@ settingsRouter.get('/', (c) => {
     instance: {
       appUrl: config.appUrl,
       demoMode: config.demoMode,
+      localDiskEnabled: config.localDisk,
       maxUploadBytes: config.maxUploadBytes,
       version: '2.0.0',
     },

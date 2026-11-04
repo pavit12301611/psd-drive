@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { startMockGoogle, type MockGoogle } from './helpers/mock-google.ts'
@@ -210,6 +210,89 @@ test('an expired access token triggers a single refresh, not a failure', async (
   assert.equal(res.status, 200, 'the provider must refresh and retry transparently')
   assert.equal(await res.text(), 'hello world')
   assert.equal(google.stats().refreshes, before + 1, 'exactly one refresh for one 401')
+})
+
+test('Sync Drive imports files added straight from the Drive web UI', async () => {
+  const folder = google.files().find((file) => file.mimeType === 'application/vnd.google-apps.folder')
+  assert.ok(folder)
+  const externalId = google.addFile(folder.id, 'from-google-drive.txt', 'added in Drive')
+
+  const before = await json<{ total: number }>(await call('/api/files?limit=200'))
+  const synced = await call('/api/files/sync', { method: 'POST' })
+  assert.equal(synced.status, 200)
+  const summary = await json<{ added: number; removed: number }>(synced)
+  assert.equal(summary.added, 1)
+
+  const after = await json<{ files: { id: string; name: string; sizeBytes: number }[] }>(await call('/api/files?limit=200'))
+  assert.equal(after.total ?? after.files.length, before.total + 1)
+  const imported = after.files.find((file) => file.name === 'from-google-drive.txt')
+  assert.ok(imported, 'the Drive-side file must appear in the app')
+  assert.equal(imported.sizeBytes, 'added in Drive'.length)
+
+  // Renaming in Drive is picked up on the next sync.
+  google.renameFile(externalId, 'renamed-in-google.txt')
+  await call('/api/files/sync', { method: 'POST' })
+  const renamed = await json<{ files: { name: string }[] }>(await call('/api/files?limit=200'))
+  assert.ok(renamed.files.some((file) => file.name === 'renamed-in-google.txt'))
+
+  // Deleting in Drive moves it to the app's recycle bin instead of leaving a dead row.
+  google.deleteFile(externalId)
+  const removedSummary = await json<{ removed: number }>(await call('/api/files/sync', { method: 'POST' }))
+  assert.equal(removedSummary.removed, 1)
+
+  const visible = await json<{ files: { name: string }[] }>(await call('/api/files?limit=200'))
+  assert.ok(!visible.files.some((file) => file.name === 'renamed-in-google.txt'))
+  const trash = await json<{ files: { name: string }[] }>(await call('/api/files?view=trash&limit=200'))
+  assert.ok(trash.files.some((file) => file.name === 'renamed-in-google.txt'))
+})
+
+test('Continue with Google signs in and auto-connects that Drive', async () => {
+  const start = await fetch(`${BASE}/api/oauth/google/login/url?next=/drive`)
+  assert.equal(start.status, 200)
+  const { url } = await json<{ url: string }>(start)
+  const nonceCookie = start.headers.getSetCookie().find((cookie) => cookie.startsWith('psd_oauth='))
+  assert.ok(nonceCookie, 'sign-in must bind the browser too')
+  const cookie = nonceCookie.split(';')[0]
+
+  const consent = await fetch(url, { redirect: 'manual' })
+  const callbackUrl = consent.headers.get('location')!
+
+  const callback = await fetch(callbackUrl, { headers: { cookie }, redirect: 'manual' })
+  assert.equal(callback.status, 302)
+  assert.equal(callback.headers.get('location'), `${BASE}/drive`)
+
+  const cookies = callback.headers.getSetCookie()
+  const refresh = cookies.find((entry) => entry.startsWith('psd_rt='))
+  const access = cookies.find((entry) => entry.startsWith('psd_at='))
+  assert.ok(refresh && access, 'a full session must be issued')
+  assert.match(refresh, /HttpOnly/i)
+
+  // The refresh cookie alone is enough to restore a session on the next load.
+  const restored = await fetch(`${BASE}/api/auth/refresh`, {
+    method: 'POST',
+    headers: { cookie: refresh.split(';')[0] },
+  })
+  assert.equal(restored.status, 200)
+  const session = await json<{ accessToken: string; user: { email: string } }>(restored)
+  assert.equal(session.user.email, 'real.person@example.com')
+
+  // …and the Drive was connected as part of signing in.
+  const accounts = await json<{ accounts: { provider: string; email: string }[] }>(
+    await fetch(`${BASE}/api/accounts`, { headers: { authorization: `Bearer ${session.accessToken}` } }),
+  )
+  assert.equal(accounts.accounts.length, 1)
+  assert.equal(accounts.accounts[0].email, 'real.person@example.com')
+})
+
+test('nothing is ever written to the server disk', async () => {
+  // The whole point of a gateway: bytes go browser -> server -> Drive without
+  // touching local storage.
+  assert.equal(existsSync(path.join(dataDir, 'blobs')), false, 'no blob directory may exist')
+  const entries = readdirSync(dataDir).sort()
+  assert.deepEqual(
+    entries.filter((entry) => entry !== 'secret.key'),
+    ['psdrive.db', 'psdrive.db-shm', 'psdrive.db-wal'].filter((entry) => entries.includes(entry)),
+  )
 })
 
 test('renaming and deleting reach Google', async () => {

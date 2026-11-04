@@ -312,15 +312,19 @@ export function AccountsPage({ stats, reload }: { stats: Stats | null; reload: (
               </span>
               <span className="text-[11px] text-dim">AWS, R2, MinIO…</span>
             </button>
-            <button
-              onClick={() => setLocalOpen(true)}
-              className="flex flex-col items-start justify-center gap-1.5 rounded-2xl border border-dashed border-line px-4 py-5 text-left transition hover:border-[var(--accent)] hover:bg-panel-2"
-            >
-              <span className="flex items-center gap-2 text-[13px] font-medium text-body">
-                <HardDrive size={15} className="text-accent" /> Local disk
-              </span>
-              <span className="text-[11px] text-dim">This server</span>
-            </button>
+            {/* Local disk is off unless ENABLE_LOCAL_DISK is set: files belong
+                in the storage you connect, not on the server. */}
+            {(stats?.localDiskEnabled ?? false) && (
+              <button
+                onClick={() => setLocalOpen(true)}
+                className="flex flex-col items-start justify-center gap-1.5 rounded-2xl border border-dashed border-line px-4 py-5 text-left transition hover:border-[var(--accent)] hover:bg-panel-2"
+              >
+                <span className="flex items-center gap-2 text-[13px] font-medium text-body">
+                  <HardDrive size={15} className="text-accent" /> Local disk
+                </span>
+                <span className="text-[11px] text-dim">This server</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -328,8 +332,9 @@ export function AccountsPage({ stats, reload }: { stats: Stats | null; reload: (
       <div className="mt-5 flex items-start gap-2 rounded-xl border border-line bg-panel-2 px-3.5 py-3 text-[11.5px] leading-relaxed text-dim">
         <ShieldCheck size={14} className="mt-0.5 shrink-0 text-faint" />
         <p>
-          Credentials are encrypted with AES-256-GCM using a key stored on this server only. Disconnecting an account
-          removes it from PSDrive but never deletes files from the provider itself.
+          Uploads stream straight through this server to your storage — no file bytes are ever written to its disk.
+          Only metadata (SQLite) and encrypted credentials live here. Disconnecting an account removes it from
+          PSDrive but never deletes files from the provider itself.
         </p>
       </div>
 

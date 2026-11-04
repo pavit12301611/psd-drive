@@ -20,12 +20,18 @@ export type MockGoogle = {
   revokeGrant: () => void
   /** Usage Google will report from /about. */
   setQuota: (limit: number | null, usage: number) => void
+  /** Drop a file straight into a folder, as the Drive web UI would. */
+  addFile: (folderId: string, name: string, contents: string, mimeType?: string) => string
+  /** Delete a file from Drive behind the app's back. */
+  deleteFile: (id: string) => void
+  /** Rename a file in Drive behind the app's back. */
+  renameFile: (id: string, name: string) => void
   stats: () => { refreshes: number; uploads: number; downloads: number; deletes: number }
   files: () => { id: string; name: string; size: number; parents: string[]; mimeType: string }[]
   close: () => Promise<void>
 }
 
-type StoredFile = { id: string; name: string; mimeType: string; bytes: Buffer; parents: string[] }
+type StoredFile = { id: string; name: string; mimeType: string; bytes: Buffer; parents: string[]; modifiedAt: number }
 type UploadSession = { name: string; mimeType: string; parents: string[] }
 
 function readBody(req: IncomingMessage): Promise<Buffer> {
@@ -64,8 +70,6 @@ export async function startMockGoogle(): Promise<MockGoogle> {
     return token
   }
 
-  const initialToken = issueAccessToken()
-
   const server: Server = createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? '/', 'http://mock')
@@ -93,7 +97,8 @@ export async function startMockGoogle(): Promise<MockGoogle> {
             return send(res, 400, { error: 'invalid_grant', error_description: 'Bad authorization code.' })
           }
           return send(res, 200, {
-            access_token: initialToken,
+            // Issue a live token even after earlier tests invalidated old ones.
+            access_token: issueAccessToken(),
             refresh_token: refreshToken,
             expires_in: 3600,
             scope: 'https://www.googleapis.com/auth/drive openid email profile',
@@ -149,6 +154,23 @@ export async function startMockGoogle(): Promise<MockGoogle> {
 
         if (path === '/drive/v3/files' && req.method === 'GET') {
           const q = url.searchParams.get('q') ?? ''
+
+          // "… in parents" is the folder listing used by Sync Drive.
+          const parents = /'([^']+)'\s+in\s+parents/.exec(q)
+          if (parents) {
+            const listed = [...files.values()]
+              .filter((file) => file.parents.includes(parents[1]))
+              .filter((file) => file.mimeType !== 'application/vnd.google-apps.folder')
+              .map((file) => ({
+                id: file.id,
+                name: file.name,
+                mimeType: file.mimeType,
+                size: String(file.bytes.length),
+                modifiedTime: new Date(file.modifiedAt).toISOString(),
+              }))
+            return send(res, 200, { files: listed })
+          }
+
           const match = /name='([^']+)'/.exec(q)
           const wanted = match?.[1]
           const hits = [...files.values()]
@@ -167,6 +189,7 @@ export async function startMockGoogle(): Promise<MockGoogle> {
             mimeType: body.mimeType ?? 'application/octet-stream',
             bytes: Buffer.alloc(0),
             parents: body.parents ?? [],
+            modifiedAt: Date.now(),
           })
           return send(res, 200, { id })
         }
@@ -242,7 +265,14 @@ export async function startMockGoogle(): Promise<MockGoogle> {
 
         const bytes = await readBody(req)
         const id = randomUUID()
-        files.set(id, { id, name: session.name, mimeType: session.mimeType, bytes, parents: session.parents })
+        files.set(id, {
+          id,
+          name: session.name,
+          mimeType: session.mimeType,
+          bytes,
+          parents: session.parents,
+          modifiedAt: Date.now(),
+        })
         sessions.delete(sessionMatch[1])
         counters.uploads++
         return send(res, 200, { id, size: String(bytes.length) })
@@ -276,6 +306,25 @@ export async function startMockGoogle(): Promise<MockGoogle> {
     },
     setQuota: (limit, usage) => {
       quota = { limit, usage }
+    },
+    addFile: (folderId, name, contents, mimeType = 'text/plain') => {
+      const id = randomUUID()
+      files.set(id, {
+        id,
+        name,
+        mimeType,
+        bytes: Buffer.from(contents),
+        parents: [folderId],
+        modifiedAt: Date.now(),
+      })
+      return id
+    },
+    deleteFile: (id) => {
+      files.delete(id)
+    },
+    renameFile: (id, name) => {
+      const file = files.get(id)
+      if (file) file.name = name
     },
     stats: () => ({ ...counters }),
     files: () => [...files.values()].map(({ id, name, bytes, parents, mimeType }) => ({ id, name, size: bytes.length, parents, mimeType })),
