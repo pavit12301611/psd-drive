@@ -112,7 +112,7 @@ export function poolSummary(userId: string): PoolSummary {
       totalBytes: account.total_bytes,
       availableBytes: accountAvailable,
       sharePct: account.total_bytes ? Math.min(100, (accountUsed / account.total_bytes) * 100) : 0,
-      status: account.last_error ? 'error' : account.status,
+      status: account.status,
       isDemo: Boolean(account.is_demo),
       detail: account.provider === 'google' ? 'Google Drive' : account.provider === 's3' ? 'S3 bucket' : 'Local disk',
     }

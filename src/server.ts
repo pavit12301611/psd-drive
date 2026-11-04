@@ -25,7 +25,11 @@ async function main() {
       sqlite: info2.version,
       users: info2.users,
     })
-    if (config.demoMode) log.info('demo mode is ON — sign in with the one-click demo button')
+    if (info2.users === 0) {
+      log.info(`first run — open http://localhost:${info.port} to create your account and connect Google Drive`)
+    }
+    if (config.demoMode) log.info('demo mode is ON — a sample workspace is available from the login screen')
+    if (config.google.clientId) log.info('Google OAuth credentials loaded from the environment')
   })
 
   const shutdown = (signal: string) => {

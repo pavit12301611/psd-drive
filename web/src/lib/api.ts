@@ -42,6 +42,16 @@ export type FolderItem = {
   fileCount: number
 }
 
+export type InstanceInfo = {
+  needsSetup: boolean
+  users: number
+  signupOpen: boolean
+  demoMode: boolean
+  google: { configured: boolean; redirectUri: string; clientId: string | null }
+  appUrl: string
+  version: string
+}
+
 export type Account = {
   id: string
   provider: string
@@ -202,6 +212,14 @@ export const api = {
   patch: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: 'PATCH', body: body === undefined ? undefined : JSON.stringify(body) }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+}
+
+/* ------------------------------- instance -------------------------------- */
+
+/** Public facts about this install — safe to call before signing in. */
+export async function fetchInstance(): Promise<InstanceInfo> {
+  const res = await fetch('/api/auth/instance', { credentials: 'include' })
+  return parse(res) as Promise<InstanceInfo>
 }
 
 /* ------------------------------- auth calls ------------------------------ */

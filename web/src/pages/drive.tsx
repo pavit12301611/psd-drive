@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDownWideNarrow,
   ArrowUpWideNarrow,
+  Cloud,
   Download,
   FolderInput,
   FolderPlus,
@@ -304,6 +305,22 @@ export function DrivePage({
   )
 
   const emptyState = useMemo(() => {
+    // No storage yet is a different kind of empty: nothing can be uploaded
+    // until an account is connected, so say exactly that.
+    if ((stats?.accounts.length ?? 0) === 0) {
+      return (
+        <EmptyState
+          icon={<Cloud size={20} />}
+          title="Connect your first storage"
+          description="PSDrive does not store your files — it drives storage you already own. Connect a Google Drive account (15 GB each) or an S3 bucket to get started."
+          action={
+            <button className="btn btn-primary" onClick={() => navigate('/accounts')}>
+              <Cloud size={15} /> Connect Google Drive
+            </button>
+          }
+        />
+      )
+    }
     if (view === 'trash') {
       return (
         <EmptyState
@@ -336,7 +353,7 @@ export function DrivePage({
         }
       />
     )
-  }, [view, debounced, onUploadClick, onNewFolder])
+  }, [view, debounced, onUploadClick, onNewFolder, stats?.accounts.length])
 
   return (
     <div className="mx-auto w-full max-w-[1400px] px-4 pb-24 pt-5 sm:px-6">

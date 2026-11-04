@@ -4,12 +4,13 @@ import { z } from 'zod'
 import { config } from '../config.ts'
 import { get, run } from '../db/index.ts'
 import { hashPassword, newId, randomToken, sha256, verifyPassword } from '../lib/crypto.ts'
-import { conflict, unauthorized } from '../lib/errors.ts'
+import { HttpError, conflict, unauthorized } from '../lib/errors.ts'
 import { signAccessToken } from '../lib/jwt.ts'
 import { rateLimit } from '../lib/ratelimit.ts'
 import { logActivity } from '../services/activity.ts'
 import { loadUser, requireUser, type AuthUser } from '../middleware/auth.ts'
 import { ensureDemoUser } from '../services/demo.ts'
+import { googleOAuth } from '../services/settings.ts'
 
 export const authRouter = new Hono()
 
@@ -76,6 +77,28 @@ function issueSession(c: Context, user: { id: string; email: string; name: strin
   }
 }
 
+/**
+ * Public instance facts the login and setup screens need *before* there is a
+ * session: is this a brand-new install, is Google configured, is demo mode on.
+ */
+authRouter.get('/instance', (c) => {
+  const users = Number(get<{ c: number }>('select count(*) as c from users')?.c ?? 0)
+  const oauth = googleOAuth()
+  return c.json({
+    needsSetup: users === 0,
+    users,
+    signupOpen: users === 0 || config.allowSignup,
+    demoMode: config.demoMode,
+    google: {
+      configured: Boolean(oauth),
+      redirectUri: oauth?.redirectUri ?? `${config.appUrl}/api/oauth/google/callback`,
+      clientId: config.google.clientId || null,
+    },
+    appUrl: config.appUrl,
+    version: '2.0.0',
+  })
+})
+
 function publicUser(user: AuthUser) {
   return { id: user.id, name: user.name, email: user.email, avatarUrl: user.avatarUrl, role: user.role }
 }
@@ -86,6 +109,13 @@ authRouter.post('/register', async (c) => {
 
   const existing = get<{ id: string }>('select id from users where email = ?', body.email)
   if (existing) throw conflict('An account with that email already exists.')
+
+  // The very first user always gets in (they are the owner); after that the
+  // instance owner decides whether strangers may self-register.
+  const userCount = Number(get<{ c: number }>('select count(*) as c from users')?.c ?? 0)
+  if (userCount > 0 && !config.allowSignup) {
+    throw new HttpError(403, 'SIGNUP_CLOSED', 'This instance is not accepting new sign-ups.')
+  }
 
   const now = Date.now()
   const id = newId()

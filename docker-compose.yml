@@ -8,9 +8,12 @@ services:
     environment:
       # APP_URL is only used for links that leave the app (Google OAuth redirects).
       APP_URL: ${APP_URL:-http://localhost:3000}
-      DEMO_MODE: ${DEMO_MODE:-true}
+      # Real install by default. Set DEMO_MODE=true to seed a sample workspace.
+      DEMO_MODE: ${DEMO_MODE:-false}
+      ALLOW_SIGNUP: ${ALLOW_SIGNUP:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      # Optional: bake Google OAuth credentials in instead of using Settings.
+      # Optional: bake Google OAuth credentials in instead of pasting them in
+      # the setup wizard / Settings page.
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       # Forces a stable encryption key across container rebuilds.

@@ -116,30 +116,62 @@ npm run dev        # API on :3000, restarts on change
 npm run dev:web    # Vite on :5173, proxies /api to :3000
 ```
 
-### First run
+### First run — the real setup
 
-`DEMO_MODE=true` (the default) creates a ready-to-explore workspace:
+A fresh install is empty. Opening **http://localhost:3000** takes you to `/setup`, a three-step
+wizard that ends with a real Google Drive connected:
 
-- **demo@psdrive.local** / **demo1234**, or just press **“Explore the demo workspace”**
-- three accounts (two 15 GB, one deliberately 92% full), six folders, real photos, PDFs, notes and backups
-- a live share link and an activity history
+1. **Create the owner account** — local email + password, hashed with scrypt.
+2. **Paste your Google OAuth client** — the page shows the exact redirect URI to register, plus a
+   copy button. The secret is encrypted with AES-256-GCM before it is stored.
+3. **Connect Google Drive** — Google's consent screen, then PSDrive verifies the Drive API is
+   reachable, reads the account's real storage quota and creates the `PSDrive` folder.
 
-Create your own account with **Sign up**; a fresh account starts empty and walks you into
-*Accounts → Connect Google Drive*.
+Nothing is faked along the way: the quota you see is Google's, uploads land in your own Drive, and
+downloads read the bytes back from Google.
+
+Want to look around first? Set `DEMO_MODE=true`, restart, and a sample workspace appears
+(**demo@psdrive.local** / **demo1234**). Demo data lives only in `DATA_DIR`; delete it and the
+instance is clean again.
 
 ## Connecting storage
 
 ### Google Drive
 
-1. In [Google Cloud Console](https://console.cloud.google.com/), create an OAuth client (type: *Web application*)
-   and enable the **Google Drive API**.
-2. Add the authorized redirect URI shown in **Settings → Google Drive credentials**
-   (defaults to `http://localhost:3000/api/oauth/google/callback`).
-3. Paste the client ID and secret into **Settings**, or set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.
-4. **Accounts → Connect Google Drive** once per account you want to pool. Use *“use another account”* in the
-   Google chooser to add more than one.
+The setup wizard does this for you; here is the same thing by hand.
 
-Access tokens are refreshed with single-flight de-duplication, so ten parallel uploads trigger one refresh.
+1. [Google Cloud Console](https://console.cloud.google.com/) → create or pick a project.
+2. **APIs & Services → Library → Google Drive API → Enable.** Skipping this is the single most common
+   failure: Google rejects every Drive call with `accessNotConfigured`.
+3. **OAuth consent screen** → *External* (or *Internal* for a Workspace domain). While the app is in
+   *Testing*, add your own Google account under **Test users**.
+4. **Credentials → Create credentials → OAuth client ID → Web application.**
+5. **Authorised redirect URIs** → paste the value shown on `/setup` (default
+   `http://localhost:3000/api/oauth/google/callback`). It must match character for character.
+6. Paste the client ID + secret into `/setup` or **Settings → Google**, or set
+   `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` and skip the form.
+
+Then **Accounts → Connect Google Drive**, once per Google account you want to pool. Use *"use another
+account"* in the Google chooser to add more than one — that is how you turn five free 15 GB drives
+into one 75 GB drive.
+
+> **Keep the connection alive.** While the OAuth app is in *Testing*, Google expires refresh tokens
+> after 7 days and every account has to be reconnected. Publish the app (or set it to *Internal* on a
+> Workspace domain) for permanent connections.
+
+**What happens under the hood**
+
+| Step | Call | Notes |
+|---|---|---|
+| Verify the grant | `GET drive/v3/about?fields=user,storageQuota` | Proves the Drive API is enabled and reads real quota |
+| Upload | `POST upload/drive/v3/files?uploadType=resumable` | Session opened, then the request body is streamed straight through — no buffering, no temp files |
+| Download | `GET drive/v3/files/{id}?alt=media` | `Range` is forwarded, so video scrubbing works |
+| Delete | `DELETE drive/v3/files/{id}` | Permanent — PSDrive keeps its own recycle bin |
+| Token | `POST oauth2.googleapis.com/token` | Single-flight refresh; one refresh for ten parallel uploads |
+
+If Google answers `401` the request is retried once with a forced refresh. `invalid_grant` (revoked
+access) marks the account **Reconnect** and takes it out of the upload rotation instead of failing
+every upload with a mystery error.
 
 ### S3-compatible
 
@@ -170,7 +202,9 @@ All configuration is environment based and fully optional. See [`.env.example`](
 | `DATA_DIR` | `./data` | SQLite database + blobs |
 | `APP_URL` | `http://localhost:3000` | Public URL for links that leave the app |
 | `APP_SECRET` | auto-generated | AES key; stored in `DATA_DIR/secret.key` if unset |
-| `DEMO_MODE` | `true` | Seed/keep the demo workspace |
+| `DEMO_MODE` | `false` | Seed a sample workspace (demo@psdrive.local / demo1234) |
+| `ALLOW_SIGNUP` | `true` | Let people other than the first owner create an account |
+| `GOOGLE_APP_FOLDER` | `PSDrive` | Folder created inside each Drive for uploads |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
 | `MAX_UPLOAD_BYTES` | 8 GiB | Per-file upload limit |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | — | Google OAuth app |
@@ -226,11 +260,12 @@ plus a rotating http-only refresh cookie.
 web/            React 19 SPA — Vite, Tailwind v4, ~97 KB gzipped, no router dependency
 src/
 ├── app.ts            Hono app: middleware, routes, static SPA, error handling
-├── server.ts         boot: migrate → seed demo → serve → graceful shutdown
+├── server.ts         boot: migrate → (optional demo seed) → serve → graceful shutdown
 ├── db/               node:sqlite wrapper (statement cache + bind assertions) & migrations
 ├── lib/              crypto, jwt, sigv4, mime, rate limiting, logging
 ├── providers/        local · s3 · google — one tiny interface
 ├── services/         accounts, quota, routing, google-auth, activity, demo seeding
+├── routes/oauth.ts   Google consent → code exchange → Drive verified → account stored
 └── routes/           auth, files, folders, uploads, shares, accounts, api-keys, v1
 ```
 
@@ -251,7 +286,7 @@ More detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## Development
 
 ```bash
-npm test          # 38 tests: SigV4 vectors, crypto, ranges, PDF, S3 provider, and full-stack API
+npm test          # 48 tests: SigV4 vectors, crypto, ranges, PDF, S3 + Google providers, full-stack API
 npm run bench     # the benchmark table above
 npm run typecheck # strict TypeScript over server + web
 ```
@@ -259,6 +294,13 @@ npm run typecheck # strict TypeScript over server + web
 The test suite boots a real server on a scratch data directory and drives it over HTTP — uploads, ranges,
 sharing, API keys, routing, trash and session rotation — plus a mock S3 bucket that proves streamed requests
 carry a `Content-Length` and that `Range` is forwarded correctly.
+
+**Google Drive is tested against the real contract, not a stubbed class.** `test/google.test.ts` starts a
+mock server that speaks Google's OAuth and Drive APIs (consent redirect, code exchange, refresh, userinfo,
+`about`, resumable upload, `alt=media` with `Range`, delete) and points the app's base URLs at it. The
+suite then walks the same path a user does: connect → quota appears → upload lands in the `PSDrive`
+folder → download is byte-exact → an expired token refreshes once and retries → a revoked grant flips
+the account to *reconnect*. Only credentials differ between that run and production.
 
 ## Security notes
 

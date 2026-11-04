@@ -108,6 +108,17 @@ Free space comes from two places:
   one account produce exactly one `POST /token`.
 - Refresh tokens are encrypted at rest and reused on re-consent (Google only issues one on the first approval).
 - The Drive folder id that holds uploads is resolved once per account and cached in the account's config JSON.
+  Lookup is single-flight too, so two parallel uploads on a fresh account create **one** Drive folder.
+- The `state` is bound to the browser by a second factor: a random nonce goes into an http-only cookie on this
+  origin and must come back with the callback. A link crafted by somebody else therefore cannot attach *their*
+  Drive to *your* PSDrive.
+- Before an account is saved, the callback calls `drive/v3/about` — so a project with the Drive API switched off
+  fails at connect time with "enable the Drive API", not silently on the first upload.
+- Every Drive call goes through one helper that retries exactly once after a forced refresh when Google answers
+  `401`. A rejected response body is cancelled before the retry so sockets are not leaked.
+- `invalid_grant` on refresh is terminal: the account is set to `reauth_required`, `available_bytes` drops to `0`
+  (which removes it from routing) and the UI offers a **Reconnect** button. `storageQuotaExceeded` on upload does
+  the same with status `full`.
 
 ## 6. Authentication model
 
@@ -150,7 +161,10 @@ behaviour without exposing FTS5 syntax. If a query yields no usable tokens it fa
 | Provider rejects an upload | Partial object removed, no metadata row written, clear `502` with the provider message |
 | Client disconnects mid-upload | Request signal aborts the pipeline, temp file cleaned up, logged at debug |
 | Google token expired | Refreshed once, transparently, then the request proceeds |
-| Google token refresh fails | Account flagged with `last_error`, surfaced on the Accounts page |
+| Google token refresh fails (`invalid_grant`) | Account → `reauth_required`, removed from rotation, **Reconnect** offered |
+| Google Drive API not enabled | `400 DRIVE_API_DISABLED` with the exact Console steps, at connect time |
+| Drive is full | Account → `full`, `507 STORAGE_FULL`; routing skips it next time |
+| OAuth redirect URI mismatch | Callback surfaces `redirect_uri_mismatch` and the URI to register |
 | No account can hold the file | `507` with total free space, before any bytes move |
 | Purge fails upstream | The object is dropped from the index anyway; the row is not left half-deleted |
 | Account disconnected | Its files leave the index; **nothing is deleted from the provider** |

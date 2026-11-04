@@ -48,7 +48,14 @@ export const config = {
   host: process.env.HOST || '0.0.0.0',
   appUrl: (process.env.APP_URL || `http://localhost:${int(process.env.PORT, 3000)}`).replace(/\/$/, ''),
   webDist: path.join(root, 'dist'),
-  demoMode: bool(process.env.DEMO_MODE, true),
+  // Demo mode is strictly opt-in. A fresh install starts empty and asks for a
+  // real owner account and a real storage connection.
+  demoMode: bool(process.env.DEMO_MODE, false),
+  /**
+   * Open registration. Once the first (owner) account exists you can close it
+   * and invite additional people from the app instead.
+   */
+  allowSignup: bool(process.env.ALLOW_SIGNUP, true),
   trustProxy: bool(process.env.TRUST_PROXY, true),
   maxUploadBytes: int(process.env.MAX_UPLOAD_BYTES, 8 * 1024 * 1024 * 1024),
   accessTokenTtl: 15 * 60, // seconds
@@ -57,6 +64,15 @@ export const config = {
     clientId: process.env.GOOGLE_CLIENT_ID || '',
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
     redirectUri: process.env.GOOGLE_REDIRECT_URI || '',
+    // Real Google endpoints. The overrides exist so the whole OAuth + Drive
+    // path can be exercised against a mock server in tests; leave them unset.
+    authUrl: process.env.GOOGLE_AUTH_URL || 'https://accounts.google.com/o/oauth2/v2/auth',
+    tokenUrl: process.env.GOOGLE_TOKEN_URL || 'https://oauth2.googleapis.com/token',
+    userinfoUrl: process.env.GOOGLE_USERINFO_URL || 'https://www.googleapis.com/oauth2/v2/userinfo',
+    driveBase: process.env.GOOGLE_DRIVE_BASE || 'https://www.googleapis.com/drive/v3',
+    uploadBase: process.env.GOOGLE_UPLOAD_BASE || 'https://www.googleapis.com/upload/drive/v3',
+    /** Folder created inside the user's Drive that holds every PSDrive upload. */
+    appFolder: process.env.GOOGLE_APP_FOLDER || 'PSDrive',
   },
   logLevel: (process.env.LOG_LEVEL || 'info') as 'debug' | 'info' | 'warn' | 'error',
 } as const

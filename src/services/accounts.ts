@@ -3,7 +3,7 @@ import { LocalProvider } from '../providers/local.ts'
 import { GoogleProvider } from '../providers/google.ts'
 import { S3Provider } from '../providers/s3.ts'
 import type { StorageProvider } from '../providers/types.ts'
-import { appFolderIdFor, accessTokenFor } from './google-auth.ts'
+import { appFolderIdFor, accessTokenFor, markAccountProblem } from './google-auth.ts'
 
 export type AccountRow = {
   id: string
@@ -58,8 +58,10 @@ export function buildProvider(account: AccountRow): StorageProvider {
 
   if (account.provider === 'google') {
     return new GoogleProvider({
-      getAccessToken: () => accessTokenFor(account),
+      getAccessToken: (options) => accessTokenFor(account, options),
       getAppFolderId: () => appFolderIdFor(account),
+      // A revoked grant or a full drive immediately leaves the rotation.
+      report: (problem) => markAccountProblem(account.id, problem),
     })
   }
 
@@ -132,7 +134,9 @@ export function toPublicAccount(account: AccountRow, used = 0): PublicAccount {
     totalBytes: account.total_bytes,
     usedBytes: accountUsage(account, used),
     availableBytes: available,
-    status: account.last_error ? 'error' : account.status,
+    // The stored status is already meaningful: connected | reauth_required |
+    // full | error. Keep it so the UI can offer the right fix.
+    status: account.status,
     isDemo: Boolean(account.is_demo),
     priority: account.priority,
     detail: describeAccount(account),

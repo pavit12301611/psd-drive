@@ -67,8 +67,17 @@ export function AccountsPage({ stats, reload }: { stats: Stats | null; reload: (
   useEffect(() => {
     const result = search.get('google')
     if (!result) return
-    if (result === 'connected') toast({ title: 'Google Drive connected', tone: 'success' })
-    if (result === 'error') toast({ title: 'Google connection failed', description: search.get('message') ?? undefined, tone: 'error' })
+    if (result === 'connected') {
+      toast({ title: 'Google Drive connected', description: 'Quota and the PSDrive folder were verified.', tone: 'success' })
+      reload()
+    }
+    if (result === 'error') {
+      toast({
+        title: 'Google connection failed',
+        description: search.get('message') ?? 'Google did not complete the connection.',
+        tone: 'error',
+      })
+    }
     navigate('/accounts', { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search.toString()])
@@ -78,7 +87,10 @@ export function AccountsPage({ stats, reload }: { stats: Stats | null; reload: (
       const { url } = await api.post<{ url: string }>('/api/oauth/google/url')
       window.location.href = url
     } catch (err) {
-      toast({ title: 'Google is not configured', description: (err as Error).message, tone: 'error' })
+      // Almost always "credentials are missing" — send them to the wizard
+      // instead of leaving a dead-end toast.
+      toast({ title: 'Google is not configured yet', description: (err as Error).message, tone: 'error' })
+      navigate('/setup')
     }
   }
 
@@ -220,6 +232,8 @@ export function AccountsPage({ stats, reload }: { stats: Stats | null; reload: (
                     <div className="flex items-center gap-1.5">
                       <p className="truncate text-[13.5px] font-semibold text-body">{account.label}</p>
                       {account.isDemo && <Chip>DEMO</Chip>}
+                      {account.status === 'reauth_required' && <Chip tone="danger">RECONNECT</Chip>}
+                      {account.status === 'full' && <Chip tone="danger">FULL</Chip>}
                       {account.status === 'error' && <Chip tone="danger">ERROR</Chip>}
                     </div>
                     <p className="truncate text-[11.5px] text-faint">
@@ -228,6 +242,11 @@ export function AccountsPage({ stats, reload }: { stats: Stats | null; reload: (
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-0.5">
+                    {account.provider === 'google' && account.status === 'reauth_required' && (
+                      <button className="btn btn-outline btn-sm" onClick={() => void connectGoogle()} title="Reconnect this Google account">
+                        Reconnect
+                      </button>
+                    )}
                     <button
                       className="rounded p-1.5 text-faint transition hover:bg-panel-2 hover:text-body"
                       onClick={() => void sync(account)}

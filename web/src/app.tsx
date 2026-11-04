@@ -19,6 +19,7 @@ import { ApiKeysPage } from './pages/api-keys'
 import { ActivityPage } from './pages/activity'
 import { SettingsPage } from './pages/settings'
 import { PublicPage } from './pages/public'
+import { SetupPage } from './pages/setup'
 
 export function App() {
   return (
@@ -42,6 +43,10 @@ function Root() {
 
   // Public share pages are standalone and need no session.
   if (publicMatch) return <PublicPage token={publicMatch.token} />
+
+  // Onboarding runs its own auth handling (create the owner, then connect a
+  // real Google Drive), so it sits above the signed-in/signed-out split.
+  if (path === '/setup') return <SetupPage />
 
   if (!ready) {
     return (

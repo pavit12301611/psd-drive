@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowRight, Cloud, HardDrive, Layers, ShieldCheck, Sparkles, Zap } from 'lucide-react'
 import { useAuth } from '../lib/app-context'
+import { fetchInstance, type InstanceInfo } from '../lib/api'
 import { navigate } from '../lib/router'
 import { BrandMark } from '../components/sidebar'
 import { Spinner } from '../components/ui'
@@ -13,6 +14,11 @@ export function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<'form' | 'demo' | null>(null)
+  const [instance, setInstance] = useState<InstanceInfo | null>(null)
+
+  useEffect(() => {
+    fetchInstance().then(setInstance).catch(() => setInstance(null))
+  }, [])
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -184,20 +190,36 @@ export function LoginPage() {
             </button>
           </form>
 
-          <div className="my-5 flex items-center gap-3">
-            <span className="h-px flex-1 bg-[var(--border)]" />
-            <span className="text-[10.5px] tracking-wide text-faint uppercase">or</span>
-            <span className="h-px flex-1 bg-[var(--border)]" />
-          </div>
+          {instance?.demoMode && (
+            <>
+              <div className="my-5 flex items-center gap-3">
+                <span className="h-px flex-1 bg-[var(--border)]" />
+                <span className="text-[10.5px] tracking-wide text-faint uppercase">or</span>
+                <span className="h-px flex-1 bg-[var(--border)]" />
+              </div>
 
-          <button className="btn btn-outline w-full py-2.5" onClick={demo} disabled={busy !== null}>
-            {busy === 'demo' ? <Spinner size={15} /> : <Sparkles size={15} />}
-            Explore the demo workspace
-          </button>
-          <p className="mt-2 text-center text-[11px] text-faint">
-            Loads a ready-made drive with sample files and three accounts.
-          </p>
+              <button className="btn btn-outline w-full py-2.5" onClick={demo} disabled={busy !== null}>
+                {busy === 'demo' ? <Spinner size={15} /> : <Sparkles size={15} />}
+                Explore the demo workspace
+              </button>
+              <p className="mt-2 text-center text-[11px] text-faint">
+                Loads a ready-made drive with sample files and three accounts.
+              </p>
+            </>
+          )}
 
+          {instance?.needsSetup ? (
+            <p className="mt-6 text-center text-[12.5px] text-dim">
+              This instance is brand new.{' '}
+              <button className="font-medium text-accent hover:underline" onClick={() => navigate('/setup')}>
+                Run the 3-step setup
+              </button>
+            </p>
+          ) : instance && !instance.signupOpen ? (
+            <p className="mt-6 text-center text-[12px] text-faint">
+              This instance is not accepting new sign-ups. Ask the owner for access.
+            </p>
+          ) : (
           <p className="mt-6 text-center text-[12.5px] text-dim">
             {mode === 'signin' ? "Don't have an account?" : 'Already have one?'}{' '}
             <button
@@ -210,6 +232,7 @@ export function LoginPage() {
               {mode === 'signin' ? 'Create one' : 'Sign in'}
             </button>
           </p>
+          )}
         </div>
       </div>
     </div>
