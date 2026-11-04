@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { Hono } from 'hono'
 import { compress } from 'hono/compress'
@@ -39,6 +40,37 @@ app.use('*', async (c, next) => {
   }
 })
 
+/**
+ * The built index.html contains one small inline script (the theme bootstrap
+ * that prevents a flash of the wrong theme). Rather than relaxing the policy
+ * with 'unsafe-inline', we hash the exact script at boot and allow that hash.
+ */
+function inlineScriptHashes(indexHtml: string): string {
+  const matches = [...indexHtml.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)]
+  return matches
+    .map((match) => `'sha256-${createHash('sha256').update(match[1]).digest('base64')}'`)
+    .join(' ')
+}
+
+const indexHtmlPath = path.join(config.webDist, 'index.html')
+const scriptHashes = existsSync(indexHtmlPath)
+  ? inlineScriptHashes(readFileSync(indexHtmlPath, 'utf8'))
+  : ''
+
+const CSP = [
+  "default-src 'self'",
+  "img-src 'self' data: blob:",
+  "media-src 'self' blob:",
+  "style-src 'self' 'unsafe-inline'",
+  `script-src 'self'${scriptHashes ? ' ' + scriptHashes : ''}`,
+  "connect-src 'self'",
+  "font-src 'self' data:",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'self'",
+  "form-action 'self'",
+].join('; ')
+
 app.use('*', async (c, next) => {
   await next()
   c.header('x-content-type-options', 'nosniff')
@@ -46,10 +78,7 @@ app.use('*', async (c, next) => {
   c.header('permissions-policy', 'camera=(), microphone=(), geolocation=()')
   if (!c.req.path.startsWith('/p/')) {
     c.header('x-frame-options', 'SAMEORIGIN')
-    c.header(
-      'content-security-policy',
-      "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'",
-    )
+    c.header('content-security-policy', CSP)
   }
 })
 
