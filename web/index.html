@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#070a11" />
+    <meta name="description" content="PSDrive — one drive for every cloud. Pool multiple Google Drive accounts and S3 buckets into a single self-hosted file manager." />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>PSDrive — one drive for every cloud</title>
+    <script>
+      // Apply the saved theme before first paint to avoid a flash.
+      try {
+        const saved = localStorage.getItem('psdrive.theme')
+        const dark = saved ? saved === 'dark' : true
+        document.documentElement.classList.toggle('dark', dark)
+        document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+      } catch {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
